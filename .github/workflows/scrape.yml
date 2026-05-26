@@ -1,0 +1,25 @@
+name: Daily Wine Scrape
+
+on:
+  schedule:
+    - cron: '0 8 * * *'   # 08:00 UTC = 10:00 dansk tid
+  workflow_dispatch:       # Manuel "Kør nu"-knap på GitHub
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Installer Python-pakker
+        run: pip install -r scraper/requirements.txt
+
+      - name: Kør scraper
+        run: python scraper/scraper.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
