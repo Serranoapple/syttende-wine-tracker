@@ -1,0 +1,33 @@
+# render.yaml — deploy both scraper and frontend to Render.com
+
+services:
+  # ── Scraper: background worker (runs daily) ─────────────────
+  - type: worker
+    name: syttende-wine-scraper
+    runtime: python
+    rootDir: scraper
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    plan: free          # free tier — will spin down, but cron keeps it alive
+    envVars:
+      - key: SUPABASE_URL
+        sync: false     # set manually in Render dashboard
+      - key: SUPABASE_SERVICE_KEY
+        sync: false     # set manually in Render dashboard
+
+  # ── Frontend: static site ────────────────────────────────────
+  - type: web
+    name: syttende-wine-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: build
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: REACT_APP_SUPABASE_URL
+        sync: false     # set manually in Render dashboard
+      - key: REACT_APP_SUPABASE_ANON_KEY
+        sync: false     # set manually in Render dashboard
