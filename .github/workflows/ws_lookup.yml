@@ -1,0 +1,38 @@
+name: Wine-Searcher Price Lookup
+
+on:
+  schedule:
+    - cron: '0 9 * * 0'   # Every Sunday 09:00 UTC
+  workflow_dispatch:
+    inputs:
+      category:
+        description: 'Category to look up'
+        required: false
+        default: 'sparkling'
+      limit:
+        description: 'Max wines to process'
+        required: false
+        default: '80'
+
+jobs:
+  lookup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install packages
+        run: pip install -r scraper/requirements.txt
+
+      - name: Run Wine-Searcher lookup
+        run: |
+          python scraper/ws_lookup.py \
+            --category "${{ github.event.inputs.category || 'sparkling' }}" \
+            --limit "${{ github.event.inputs.limit || '80' }}"
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          WINE_SEARCHER_API_KEY: ${{ secrets.WINE_SEARCHER_API_KEY }}
