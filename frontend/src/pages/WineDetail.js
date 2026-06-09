@@ -33,10 +33,45 @@ export default function WineDetail() {
   const [changes, setChanges] = useState([])
   const [loading, setLoading] = useState(true)
 
+  const [wsLoading, setWsLoading] = useState(false)
+
+  async function fetchWsPrice(w) {
+    if (!w || w.ws_price_eur || wsLoading) return
+    setWsLoading(true)
+    try {
+      const fnUrl = `${process.env.REACT_APP_SUPABASE_URL}/functions/v1/ws-lookup`
+      const resp = await fetch(fnUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.REACT_APP_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({
+          wine_id:  w.id,
+          name:     w.name,
+          producer: w.producer,
+          vintage:  w.vintage,
+        }),
+      })
+      const data = await resp.json()
+      if (data.found) {
+        setWine(prev => ({
+          ...prev,
+          ws_price_eur: data.ws_price_eur,
+          ws_score:     data.ws_score,
+          ws_url:       data.ws_url,
+        }))
+      }
+    } catch (e) {
+      console.warn('ws-lookup failed:', e)
+    }
+    setWsLoading(false)
+  }
+
   useEffect(() => {
     async function load() {
       const [wineRes, priceRes, changeRes] = await Promise.all([
-        supabase.from('wines_current_price').select('*').eq('id', id).single(),
+        supabase.from('wines_current_price').select('*, wines(ws_score)').eq('id', id).single(),
         supabase.from('wine_prices').select('price_dkk,observed_at').eq('wine_id', id).order('observed_at', { ascending: true }),
         supabase.from('change_log').select('*').eq('wine_id', id).order('created_at', { ascending: false }).limit(20),
       ])
@@ -44,6 +79,10 @@ export default function WineDetail() {
       setPrices(priceRes.data || [])
       setChanges(changeRes.data || [])
       setLoading(false)
+      // Fetch Wine-Searcher price in background if not cached
+      if (wineRes.data && !wineRes.data.ws_price_eur) {
+        fetchWsPrice(wineRes.data)
+      }
     }
     load()
   }, [id])
@@ -244,9 +283,16 @@ export default function WineDetail() {
                 )}
               </>
             ) : (
-              <div style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '0.9rem' }}>
-                Wine-Searcher pris hentes ved næste scrape.
-              </div>
+              {wsLoading ? (
+                  <div style={{ color: 'var(--text-muted)', fontFamily: 'var(--sans)', fontSize: '0.82rem' }}>
+                    <div className="skeleton" style={{ height: 32, width: '60%', marginBottom: '0.5rem' }} />
+                    <div className="skeleton" style={{ height: 16, width: '80%' }} />
+                  </div>
+                ) : (
+                  <div style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '0.9rem' }}>
+                    Ikke fundet på Wine-Searcher.
+                  </div>
+                )}
             )}
           </div>
         </div>
