@@ -394,12 +394,33 @@ def clean_producer(producer: str) -> str:
     return producer
 
 
+# Country/region suffixes that appear in by-the-glass wine names
+_COUNTRY_NAMES = {
+    "FRANCE", "GERMANY", "AUSTRIA", "ITALY", "SPAIN", "PORTUGAL",
+    "USA", "AUSTRALIA", "NEW ZEALAND", "SOUTH AFRICA", "ARGENTINA",
+    "HUNGARY", "DENMARK", "GREECE", "CHILE", "CANADA",
+}
+
 def clean_wine_name(name: str) -> str:
-    """Normalise whitespace and strip punctuation artefacts from wine name."""
+    """
+    Normalise whitespace and strip region/country suffixes from wine names.
+    By-the-glass entries often include region and country in the name:
+    e.g. "AS SORTES - VALDEORRAS SPAIN" → "AS SORTES"
+         "RIESLING - MOSEL, GERMANY" → "RIESLING"
+    """
     if name in ("CL KR", "KR", "CL"):
         return ""
     name = re.sub(r"\s+", " ", name).strip()
     name = name.replace(",", "").strip()
+
+    # Strip " - REGION..." suffix if it ends in a country name
+    dash_idx = name.find(" - ")
+    if dash_idx != -1:
+        suffix = name[dash_idx + 3:].upper()
+        # Check if any country name appears in the suffix
+        if any(country in suffix for country in _COUNTRY_NAMES):
+            name = name[:dash_idx].strip()
+
     return name
 
 
