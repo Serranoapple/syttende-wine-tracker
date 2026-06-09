@@ -36,8 +36,9 @@ export default function WineDetail() {
   const [wsLoading, setWsLoading] = useState(false)
   const [wsError, setWsError]     = useState(false)
 
-  async function fetchWsPrice(w) {
-    if (!w || w.ws_price_eur || wsLoading) return
+  const fetchWsPrice = React.useCallback(async function fetchWsPrice(w) {
+    if (!w || wsLoading) return
+    if (w.ws_price_eur && !wsError) return  // already cached and no error
     setWsLoading(true)
     setWsError(false)
     try {
@@ -87,12 +88,12 @@ export default function WineDetail() {
       setWsError(true)
     }
     setWsLoading(false)
-  }
+  }, []) // eslint-disable-line
 
   useEffect(() => {
     async function load() {
       const [wineRes, priceRes, changeRes] = await Promise.all([
-        supabase.from('wines_current_price').select('*, wines(ws_score)').eq('id', id).single(),
+        supabase.from('wines_current_price').select('id,name,producer,vintage,category,country,region,volume_cl,subcategory,current_price_dkk,last_seen,restaurant_market_ratio,ws_price_eur,ws_score,ws_url,ws_checked_at,is_nv').eq('id', id).single(),
         supabase.from('wine_prices').select('price_dkk,observed_at').eq('wine_id', id).order('observed_at', { ascending: true }),
         supabase.from('change_log').select('*').eq('wine_id', id).order('created_at', { ascending: false }).limit(20),
       ])
@@ -102,7 +103,10 @@ export default function WineDetail() {
       setLoading(false)
       // Fetch Wine-Searcher price in background if not cached
       if (wineRes.data && !wineRes.data.ws_price_eur) {
+        console.log('No WS price — fetching for:', wineRes.data.name)
         fetchWsPrice(wineRes.data)
+      } else if (wineRes.data?.ws_price_eur) {
+        console.log('WS price already cached:', wineRes.data.ws_price_eur)
       }
     }
     load()
@@ -312,13 +316,17 @@ export default function WineDetail() {
                 ) : wsError ? (
                   <div style={{ color: 'var(--text-muted)', fontFamily: 'var(--sans)', fontSize: '0.8rem' }}>
                     Kunne ikke hente pris lige nu.
-                    <div style={{ marginTop: '0.5rem' }}>
+                    <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+                      <button onClick={() => fetchWsPrice(wine)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.7rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--gold)', padding: 0 }}>
+                        Prøv igen →
+                      </button>
                       <a
                         href={`https://www.wine-searcher.com/find/${encodeURIComponent([wine.producer, wine.name].filter(Boolean).join(' '))}/1/europe`}
                         target="_blank" rel="noreferrer"
                         style={{ fontSize: '0.7rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)' }}
                       >
-                        Søg manuelt på Wine-Searcher →
+                        Søg på Wine-Searcher →
                       </a>
                     </div>
                   </div>
