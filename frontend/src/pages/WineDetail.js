@@ -12,11 +12,7 @@ const CAT_LABELS = {
 function CustomTooltip({ active, payload, label }) {
   if (active && payload?.length) {
     return (
-      <div style={{
-        background: 'var(--surface-2)', border: '1px solid var(--border)',
-        borderRadius: 2, padding: '0.6rem 1rem',
-        fontFamily: 'var(--sans)', fontSize: '0.8rem',
-      }}>
+      <div style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 2, padding: '0.6rem 1rem', fontFamily: 'var(--sans)', fontSize: '0.8rem' }}>
         <div style={{ color: 'var(--text-muted)', marginBottom: '0.2rem' }}>{label}</div>
         <div style={{ color: 'var(--gold)', fontFamily: 'var(--serif)', fontSize: '1.1rem' }}>
           {payload[0].value.toLocaleString('da-DK')} DKK
@@ -29,58 +25,59 @@ function CustomTooltip({ active, payload, label }) {
 
 export default function WineDetail() {
   const { id } = useParams()
-  const [wine, setWine]       = useState(null)
-  const [prices, setPrices]   = useState([])
-  const [changes, setChanges] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [wine, setWine]           = useState(null)
+  const [prices, setPrices]       = useState([])
+  const [changes, setChanges]     = useState([])
+  const [loading, setLoading]     = useState(true)
   const [wsLoading, setWsLoading] = useState(false)
-  const [wsError, setWsError]     = useState(false)
+  const [wsError, setWsError]     = useState(null)
+
+  function buildWsUrl(w) {
+    const q = [w.producer, w.name].filter(Boolean).join('+').replace(/\s+/g, '+')
+    return `https://www.wine-searcher.com/find/${q}/${w.vintage ?? 'NV'}/europe`
+  }
 
   const fetchWsPrice = useCallback(async (w) => {
     if (!w || wsLoading) return
     setWsLoading(true)
-    setWsError(false)
+    setWsError(null)
     try {
-      const query   = [w.producer, w.name].filter(Boolean).join(' ')
-      const vintage = w.vintage ?? 'NV'
-      const encoded = encodeURIComponent(query).replace(/%20/g, '+')
-      const wsUrl   = `https://www.wine-searcher.com/find/${encoded}/${vintage}/europe`
-      const proxy   = `https://api.allorigins.win/get?url=${encodeURIComponent(wsUrl)}`
+      // Call our Supabase Edge Function — runs server-side, no CORS issues
+      const fnUrl = `${process.env.REACT_APP_SUPABASE_URL}/functions/v1/ws-lookup`
+      const resp  = await fetch(fnUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${process.env.REACT_APP_SUPABASE_ANON_KEY}`,
+          'apikey':        process.env.REACT_APP_SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({
+          wine_id:  w.id,
+          name:     w.name,
+          producer: w.producer,
+          vintage:  w.vintage,
+        }),
+        signal: AbortSignal.timeout(15000),
+      })
 
-      const resp = await fetch(proxy, { signal: AbortSignal.timeout(15000) })
       const data = await resp.json()
-      const html = data.contents || ''
 
-      if (!html || html.length < 500) throw new Error('empty response')
-
-      const priceMatch = html.match(/€\s*(\d+(?:[.,]\d+)?)/)
-      if (!priceMatch) throw new Error('no price found')
-
-      const price = parseFloat(priceMatch[1].replace(',', '.'))
-      if (isNaN(price) || price < 5) throw new Error('invalid price')
-
-      const scoreMatch = html.match(/"score"\s*:\s*(\d+)/)
-      const score = scoreMatch ? parseInt(scoreMatch[1]) : null
-
-      await supabase.from('wines').update({
-        ws_price_eur:  Math.round(price * 100) / 100,
-        ws_score:      score,
-        ws_url:        wsUrl,
-        ws_checked_at: new Date().toISOString(),
-      }).eq('id', w.id)
-
-      setWine(prev => ({
-        ...prev,
-        ws_price_eur: Math.round(price * 100) / 100,
-        ws_score:     score,
-        ws_url:       wsUrl,
-      }))
+      if (data.found && data.price) {
+        setWine(prev => ({
+          ...prev,
+          ws_price_eur: data.price,
+          ws_score:     data.score,
+          ws_url:       data.url,
+        }))
+      } else {
+        setWsError('Ikke fundet på Wine-Searcher.')
+      }
     } catch (e) {
       console.warn('ws-lookup failed:', e.message)
-      setWsError(true)
+      setWsError('Opslag fejlede — prøv igen.')
     }
     setWsLoading(false)
-  }, [wsLoading])
+  }, [wsLoading]) // eslint-disable-line
 
   useEffect(() => {
     async function load() {
@@ -127,7 +124,9 @@ export default function WineDetail() {
 
   const priceMin  = prices.length ? Math.min(...prices.map(p => p.price_dkk)) : null
   const priceMax  = prices.length ? Math.max(...prices.map(p => p.price_dkk)) : null
-  const marketDkk = wine.ws_price_eur ? Math.round(wine.ws_price_eur * 7.46) : null
+  const wsPrice   = wine.ws_price_eur
+  const marketDkk = wsPrice ? Math.round(wsPrice * 7.46) : null
+  const wsUrl     = wine.ws_url || buildWsUrl(wine)
 
   const typeMap = {
     added:      { badge: 'badge-added',   icon: '+' },
@@ -136,19 +135,15 @@ export default function WineDetail() {
     price_down: { badge: 'badge-down',    icon: '↓' },
   }
 
-  const vintageLabel = wine.vintage ?? 'NV'
-
   return (
     <div className="container" style={{ paddingTop: '3rem', paddingBottom: '4rem' }}>
 
-      {/* Breadcrumb */}
       <div className="fade-up" style={{ marginBottom: '1.5rem' }}>
         <Link to="/wines" style={{ fontSize: '0.7rem', letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
           ← Vinkort
         </Link>
       </div>
 
-      {/* Hero */}
       <div className="fade-up" style={{ marginBottom: '2.5rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
           <div>
@@ -158,34 +153,27 @@ export default function WineDetail() {
               </span>
             )}
             <h1 style={{ fontStyle: 'italic', marginBottom: '0.4rem', color: 'var(--text)', lineHeight: 1.15 }}>
-              {vintageLabel} {wine.name}
+              {wine.vintage ?? 'NV'} {wine.name}
             </h1>
             <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
               {wine.producer}
               {(wine.region || wine.country) && (
-                <span style={{ marginLeft: '1rem' }}>
-                  {[wine.region, wine.country].filter(Boolean).join(', ')}
-                </span>
+                <span style={{ marginLeft: '1rem' }}>{[wine.region, wine.country].filter(Boolean).join(', ')}</span>
               )}
-              {wine.volume_cl !== 75 && (
-                <span style={{ marginLeft: '1rem' }}>{wine.volume_cl} cl</span>
-              )}
+              {wine.volume_cl !== 75 && <span style={{ marginLeft: '1rem' }}>{wine.volume_cl} cl</span>}
             </div>
           </div>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontFamily: 'var(--serif)', fontSize: '2.2rem', color: 'var(--gold)', lineHeight: 1 }}>
               {wine.current_price_dkk?.toLocaleString('da-DK')} DKK
             </div>
-            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
-              Aktuel restaurantpris
-            </div>
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>Aktuel restaurantpris</div>
           </div>
         </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '1.5rem' }}>
         <div>
-          {/* Price chart */}
           <div className="card fade-up-2" style={{ marginBottom: '1.5rem' }}>
             <div className="section-rule"><span>Prishistorik</span></div>
             {chartData.length < 2 ? (
@@ -205,16 +193,13 @@ export default function WineDetail() {
             )}
           </div>
 
-          {/* Change history */}
           <div className="card fade-up-3">
             <div className="section-rule"><span>Ændringshistorik</span></div>
             {changes.length === 0 ? (
               <div style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>Ingen ændringer registreret.</div>
             ) : (
               <table className="wine-table">
-                <thead>
-                  <tr><th>Dato</th><th>Ændring</th><th>Fra</th><th>Til</th></tr>
-                </thead>
+                <thead><tr><th>Dato</th><th>Ændring</th><th>Fra</th><th>Til</th></tr></thead>
                 <tbody>
                   {changes.map(c => {
                     const t = typeMap[c.change_type] || { badge: '', icon: '·' }
@@ -235,17 +220,14 @@ export default function WineDetail() {
           </div>
         </div>
 
-        {/* Sidebar */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-
-          {/* Price stats */}
           <div className="card fade-up-2">
             <div className="section-rule"><span>Prisnøgletal</span></div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
               {[
-                { label: 'Minimum',           value: priceMin ? `${priceMin.toLocaleString('da-DK')} DKK` : '—' },
-                { label: 'Maximum',           value: priceMax ? `${priceMax.toLocaleString('da-DK')} DKK` : '—' },
-                { label: 'Antal prispunkter', value: prices.length },
+                { label: 'Minimum',            value: priceMin ? `${priceMin.toLocaleString('da-DK')} DKK` : '—' },
+                { label: 'Maximum',            value: priceMax ? `${priceMax.toLocaleString('da-DK')} DKK` : '—' },
+                { label: 'Antal prispunkter',  value: prices.length },
                 { label: 'Første registreret', value: prices.length ? new Date(prices[0].observed_at).toLocaleDateString('da-DK', { day: 'numeric', month: 'short', year: 'numeric' }) : '—' },
               ].map(({ label, value }) => (
                 <div key={label}>
@@ -256,14 +238,13 @@ export default function WineDetail() {
             </div>
           </div>
 
-          {/* Wine-Searcher */}
           <div className="card fade-up-3">
             <div className="section-rule"><span>Wine-Searcher EU</span></div>
 
-            {wine.ws_price_eur ? (
+            {wsPrice ? (
               <>
                 <div style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--gold)', marginBottom: '0.5rem' }}>
-                  €{wine.ws_price_eur}
+                  €{wsPrice}
                   <span style={{ fontSize: '1rem', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>
                     (~{marketDkk?.toLocaleString('da-DK')} DKK)
                   </span>
@@ -289,12 +270,10 @@ export default function WineDetail() {
                     </span>
                   </div>
                 )}
-                {wine.ws_url && (
-                  <a href={wine.ws_url} target="_blank" rel="noreferrer"
-                    style={{ fontSize: '0.7rem', letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
-                    Se på Wine-Searcher →
-                  </a>
-                )}
+                <a href={wsUrl} target="_blank" rel="noreferrer"
+                  style={{ fontSize: '0.7rem', letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                  Se på Wine-Searcher →
+                </a>
                 {wine.ws_checked_at && (
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
                     Opdateret {new Date(wine.ws_checked_at).toLocaleDateString('da-DK')}
@@ -305,38 +284,29 @@ export default function WineDetail() {
               <div>
                 <div className="skeleton" style={{ height: 36, width: '55%', marginBottom: '0.5rem' }} />
                 <div className="skeleton" style={{ height: 14, width: '75%', marginBottom: '0.4rem' }} />
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>Henter pris fra Wine-Searcher...</div>
-              </div>
-            ) : wsError ? (
-              <div style={{ color: 'var(--text-muted)', fontFamily: 'var(--sans)', fontSize: '0.8rem' }}>
-                Kunne ikke hente pris automatisk.
-                <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
-                  <button
-                    onClick={() => { setWsError(false); fetchWsPrice(wine) }}
-                    style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 2, cursor: 'pointer', fontSize: '0.7rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--gold)', padding: '0.4rem 0.8rem' }}
-                  >
-                    Prøv igen
-                  </button>
-                  <a
-                    href={`https://www.wine-searcher.com/find/${encodeURIComponent([wine.producer, wine.name].filter(Boolean).join(' '))}/1/europe`}
-                    target="_blank" rel="noreferrer"
-                    style={{ fontSize: '0.7rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}
-                  >
-                    Søg manuelt →
-                  </a>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                  Søger pris via Wine-Searcher...
                 </div>
               </div>
             ) : (
               <div>
-                <div style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
-                  Ingen pris fundet endnu.
+                {wsError && (
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                    {wsError}
+                  </div>
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <button
+                    onClick={() => fetchWsPrice(wine)}
+                    style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 2, cursor: 'pointer', fontSize: '0.7rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--gold)', padding: '0.45rem 0.9rem', textAlign: 'left' }}
+                  >
+                    {wsError ? 'Prøv igen' : 'Hent Wine-Searcher pris'}
+                  </button>
+                  <a href={wsUrl} target="_blank" rel="noreferrer"
+                    style={{ fontSize: '0.7rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)', padding: '0.45rem 0' }}>
+                    Søg manuelt på Wine-Searcher →
+                  </a>
                 </div>
-                <button
-                  onClick={() => fetchWsPrice(wine)}
-                  style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 2, cursor: 'pointer', fontSize: '0.7rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--gold)', padding: '0.4rem 0.8rem' }}
-                >
-                  Hent Wine-Searcher pris
-                </button>
               </div>
             )}
           </div>
