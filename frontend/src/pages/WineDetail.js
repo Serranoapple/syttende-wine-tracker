@@ -34,36 +34,57 @@ export default function WineDetail() {
   const [loading, setLoading] = useState(true)
 
   const [wsLoading, setWsLoading] = useState(false)
+  const [wsError, setWsError]     = useState(false)
 
   async function fetchWsPrice(w) {
     if (!w || w.ws_price_eur || wsLoading) return
     setWsLoading(true)
+    setWsError(false)
     try {
-      const fnUrl = `${process.env.REACT_APP_SUPABASE_URL}/functions/v1/ws-lookup`
-      const resp = await fetch(fnUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.REACT_APP_SUPABASE_ANON_KEY}`,
-        },
-        body: JSON.stringify({
-          wine_id:  w.id,
-          name:     w.name,
-          producer: w.producer,
-          vintage:  w.vintage,
-        }),
-      })
-      const data = await resp.json()
-      if (data.found) {
-        setWine(prev => ({
-          ...prev,
-          ws_price_eur: data.ws_price_eur,
-          ws_score:     data.ws_score,
-          ws_url:       data.ws_url,
-        }))
+      // Build Wine-Searcher search URL
+      const query    = [w.producer, w.name].filter(Boolean).join(' ')
+      const vintage  = w.vintage ?? 'NV'
+      const encoded  = encodeURIComponent(query).replace(/%20/g, '+')
+      const wsUrl    = `https://www.wine-searcher.com/find/${encoded}/${vintage}/europe`
+
+      // Use allorigins.win — a free CORS proxy that forwards requests
+      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(wsUrl)}`
+      const resp     = await fetch(proxyUrl, { signal: AbortSignal.timeout(15000) })
+      const json     = await resp.json()
+      const html     = json.contents || ''
+
+      if (!html || html.includes('blocked') || html.length < 500) {
+        throw new Error('blocked or empty')
       }
+
+      // Extract lowest EUR price
+      const priceMatch = html.match(/€\s*(\d+(?:[.,]\d+)?)/)
+      if (!priceMatch) throw new Error('no price found')
+
+      const price = parseFloat(priceMatch[1].replace(',', '.'))
+      if (isNaN(price) || price < 5) throw new Error('invalid price')
+
+      // Extract critic score if present
+      const scoreMatch = html.match(/"score"\s*:\s*(\d+)/)
+      const score      = scoreMatch ? parseInt(scoreMatch[1]) : null
+
+      // Save to Supabase (anon key — requires RLS policy below)
+      await supabase.from('wines').update({
+        ws_price_eur:  Math.round(price * 100) / 100,
+        ws_score:      score,
+        ws_url:        wsUrl,
+        ws_checked_at: new Date().toISOString(),
+      }).eq('id', w.id)
+
+      setWine(prev => ({
+        ...prev,
+        ws_price_eur: Math.round(price * 100) / 100,
+        ws_score:     score,
+        ws_url:       wsUrl,
+      }))
     } catch (e) {
-      console.warn('ws-lookup failed:', e)
+      console.warn('ws-lookup failed:', e.message)
+      setWsError(true)
     }
     setWsLoading(false)
   }
@@ -284,9 +305,22 @@ export default function WineDetail() {
               </>
             ) : (
               {wsLoading ? (
-                  <div style={{ color: 'var(--text-muted)', fontFamily: 'var(--sans)', fontSize: '0.82rem' }}>
-                    <div className="skeleton" style={{ height: 32, width: '60%', marginBottom: '0.5rem' }} />
-                    <div className="skeleton" style={{ height: 16, width: '80%' }} />
+                  <div>
+                    <div className="skeleton" style={{ height: 36, width: '55%', marginBottom: '0.5rem' }} />
+                    <div className="skeleton" style={{ height: 14, width: '75%' }} />
+                  </div>
+                ) : wsError ? (
+                  <div style={{ color: 'var(--text-muted)', fontFamily: 'var(--sans)', fontSize: '0.8rem' }}>
+                    Kunne ikke hente pris lige nu.
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <a
+                        href={`https://www.wine-searcher.com/find/${encodeURIComponent([wine.producer, wine.name].filter(Boolean).join(' '))}/1/europe`}
+                        target="_blank" rel="noreferrer"
+                        style={{ fontSize: '0.7rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)' }}
+                      >
+                        Søg manuelt på Wine-Searcher →
+                      </a>
+                    </div>
                   </div>
                 ) : (
                   <div style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '0.9rem' }}>
